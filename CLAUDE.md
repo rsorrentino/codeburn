@@ -46,6 +46,9 @@ git push origin main
 ```
 
 ### Handling external PRs
+- NEVER rewrite a contributor's changes on your own branch. Always merge THEIR branch
+- Add your improvements as separate commits on top of their branch, not as replacements
+- This preserves their authorship in git history so GitHub shows them as a contributor
 ```bash
 gh pr checkout <number>           # checkout PR locally
 npx vitest run                    # test their code
