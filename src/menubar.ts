@@ -4,6 +4,7 @@ import { chmod, mkdir, unlink, writeFile } from 'fs/promises'
 import { homedir, platform } from 'os'
 import { join } from 'path'
 import { formatCost, formatTokens } from './format.js'
+import { getCurrency } from './currency.js'
 
 const PLUGIN_REFRESH = '5m'
 
@@ -149,8 +150,40 @@ export function renderMenubarFormat(
 
   lines.push('---')
   const home = process.env.HOME ?? '~'
+  const bin = getCodeburnBin()
   lines.push(`Open Full Report | terminal=true shell=/bin/bash param1=-c param2="cd '${home}/codeburn' && npx tsx src/cli.ts report; echo ''; echo 'Press any key to close...'; read -n1"`)
   lines.push(`Export CSV to Desktop | terminal=false shell=/bin/bash param1=-c param2="cd '${home}/codeburn' && npx tsx src/cli.ts export -o '${home}/Desktop/codeburn-report.csv' 2>/dev/null"`)
+
+  // Currency submenu -- common currencies as clickable items.
+  // Clicking one runs 'codeburn config currency XXX' and refreshes the plugin.
+  const activeCurrency = getCurrency().code
+  const currencies = [
+    { code: 'USD', name: 'US Dollar' },
+    { code: 'GBP', name: 'British Pound' },
+    { code: 'EUR', name: 'Euro' },
+    { code: 'AUD', name: 'Australian Dollar' },
+    { code: 'CAD', name: 'Canadian Dollar' },
+    { code: 'NZD', name: 'New Zealand Dollar' },
+    { code: 'JPY', name: 'Japanese Yen' },
+    { code: 'CHF', name: 'Swiss Franc' },
+    { code: 'INR', name: 'Indian Rupee' },
+    { code: 'BRL', name: 'Brazilian Real' },
+    { code: 'SEK', name: 'Swedish Krona' },
+    { code: 'SGD', name: 'Singapore Dollar' },
+    { code: 'HKD', name: 'Hong Kong Dollar' },
+    { code: 'KRW', name: 'South Korean Won' },
+    { code: 'MXN', name: 'Mexican Peso' },
+    { code: 'ZAR', name: 'South African Rand' },
+  ]
+  lines.push(`Currency: ${activeCurrency} | size=14`)
+  for (const { code, name } of currencies) {
+    const check = code === activeCurrency ? ' *' : ''
+    const cmd = code === 'USD'
+      ? `${bin} config currency --reset`
+      : `${bin} config currency ${code}`
+    lines.push(`--${name} (${code})${check} | terminal=false refresh=true shell=/bin/bash param1=-c param2="${cmd}"`)
+  }
+
   lines.push(`Refresh | refresh=true`)
 
   return lines.join('\n')
