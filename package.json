@@ -26,6 +26,9 @@
     "observability",
     "developer-tools"
   ],
+  "engines": {
+    "node": ">=20"
+  },
   "author": "AgentSeal <hello@agentseal.org>",
   "license": "MIT",
   "dependencies": {

@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/codeburn"><img src="https://img.shields.io/npm/v/codeburn.svg" alt="npm version" /></a>
   <a href="https://www.npmjs.com/package/codeburn"><img src="https://img.shields.io/npm/dm/codeburn.svg" alt="npm downloads" /></a>
   <a href="https://github.com/agentseal/codeburn/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/codeburn.svg" alt="license" /></a>
-  <a href="https://github.com/agentseal/codeburn"><img src="https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg" alt="node version" /></a>
+  <a href="https://github.com/agentseal/codeburn"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg" alt="node version" /></a>
 </p>
 
 <p align="center">
@@ -35,7 +35,7 @@ npx codeburn
 
 ### Requirements
 
-- Node.js 18+
+- Node.js 20+
 - Claude Code (reads `~/.claude/projects/` session data)
 
 ## Usage
