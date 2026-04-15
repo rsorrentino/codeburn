@@ -71,8 +71,8 @@ describe('cursor sqlite adapter', () => {
 
 describe('cursor cache', () => {
   it('returns null when no cache exists', async () => {
-    const { readCursorCache } = await import('../../src/cursor-cache.js')
-    const cache = await readCursorCache()
-    expect(cache === null || typeof cache === 'object').toBe(true)
+    const { readCachedResults } = await import('../../src/cursor-cache.js')
+    const result = await readCachedResults('/nonexistent/path.db')
+    expect(result).toBeNull()
   })
 })

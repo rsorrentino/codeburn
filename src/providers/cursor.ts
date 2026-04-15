@@ -3,6 +3,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 import { calculateCost } from '../models.js'
+import { readCachedResults, writeCachedResults } from '../cursor-cache.js'
 import { isSqliteAvailable, getSqliteLoadError, openDatabase, type SqliteDatabase } from '../sqlite.js'
 import type { Provider, SessionSource, SessionParser, ParsedProviderCall } from './types.js'
 
@@ -213,6 +214,16 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         return
       }
 
+      const cached = await readCachedResults(source.path)
+      if (cached) {
+        for (const call of cached) {
+          if (seenKeys.has(call.deduplicationKey)) continue
+          seenKeys.add(call.deduplicationKey)
+          yield call
+        }
+        return
+      }
+
       let db: SqliteDatabase
       try {
         db = openDatabase(source.path)
@@ -230,6 +241,8 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         await new Promise(r => setTimeout(r, 0))
 
         const { calls } = parseBubbles(db, seenKeys)
+
+        await writeCachedResults(source.path, calls)
 
         for (const call of calls) {
           yield call
