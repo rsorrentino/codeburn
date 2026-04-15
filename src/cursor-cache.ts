@@ -20,7 +20,7 @@ function getCachePath(): string {
   return join(getCacheDir(), CACHE_FILE)
 }
 
-export async function getDbFingerprint(dbPath: string): Promise<{ mtimeMs: number; size: number } | null> {
+async function getDbFingerprint(dbPath: string): Promise<{ mtimeMs: number; size: number } | null> {
   try {
     const s = await stat(dbPath)
     return { mtimeMs: s.mtimeMs, size: s.size }

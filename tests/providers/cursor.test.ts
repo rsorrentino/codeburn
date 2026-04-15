@@ -1,15 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { getAllProviders } from '../../src/providers/index.js'
 import type { Provider } from '../../src/providers/types.js'
 
-let cursorProvider: Provider
-
-beforeEach(async () => {
-  const all = await getAllProviders()
-  cursorProvider = all.find(p => p.name === 'cursor')!
-})
-
 describe('cursor provider', () => {
+  let cursorProvider: Provider
+
+  beforeEach(async () => {
+    const all = await getAllProviders()
+    cursorProvider = all.find(p => p.name === 'cursor')!
+  })
   it('is registered', () => {
     expect(cursorProvider).toBeDefined()
     expect(cursorProvider.name).toBe('cursor')
