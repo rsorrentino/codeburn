@@ -3,7 +3,7 @@ import { join } from 'path'
 import { homedir } from 'os'
 
 type CacheEntry = {
-  lastCreatedAt: number
+  lastCreatedAt: string
   dbSizeBytes: number
 }
 
@@ -26,7 +26,7 @@ export async function readCursorCache(): Promise<CacheEntry | null> {
   }
 }
 
-export async function writeCursorCache(lastCreatedAt: number, dbSizeBytes: number): Promise<void> {
+export async function writeCursorCache(lastCreatedAt: string, dbSizeBytes: number): Promise<void> {
   const dir = getCacheDir()
   await mkdir(dir, { recursive: true })
   const entry: CacheEntry = { lastCreatedAt, dbSizeBytes }

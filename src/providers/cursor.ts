@@ -28,7 +28,7 @@ type BubbleRow = {
   input_tokens: number | null
   output_tokens: number | null
   model: string | null
-  created_at: number | null
+  created_at: string | null
   conversation_id: string | null
 }
 
@@ -80,13 +80,14 @@ function validateSchema(db: SqliteDatabase): boolean {
   }
 }
 
-function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>, afterTimestamp?: number): { calls: ParsedProviderCall[]; maxCreatedAt: number } {
+function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>, afterTimestamp?: string): { calls: ParsedProviderCall[]; maxCreatedAt: string } {
   const results: ParsedProviderCall[] = []
   let skipped = 0
-  let maxCreatedAt = afterTimestamp ?? 0
+  let maxCreatedAt = afterTimestamp ?? ''
 
-  const DEFAULT_LOOKBACK_MS = 120 * 24 * 60 * 60 * 1000
-  const timeFloor = afterTimestamp ?? (Date.now() - DEFAULT_LOOKBACK_MS)
+  const DEFAULT_LOOKBACK_DAYS = 120
+  const timeFloor = afterTimestamp
+    ?? new Date(Date.now() - DEFAULT_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString()
 
   let rows: BubbleRow[]
   try {
@@ -101,7 +102,7 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>, afterTimestamp?
       const outputTokens = row.output_tokens ?? 0
       if (inputTokens === 0 && outputTokens === 0) continue
 
-      const createdAt = row.created_at ?? 0
+      const createdAt = (row.created_at as string) ?? ''
       if (createdAt > maxCreatedAt) maxCreatedAt = createdAt
       const conversationId = row.conversation_id ?? 'unknown'
       const dedupKey = `cursor:${conversationId}:${createdAt}:${inputTokens}:${outputTokens}`
@@ -114,9 +115,7 @@ function parseBubbles(db: SqliteDatabase, seenKeys: Set<string>, afterTimestamp?
 
       const costUSD = calculateCost(pricingModel, inputTokens, outputTokens, 0, 0, 0)
 
-      const timestamp = createdAt > 0
-        ? new Date(createdAt).toISOString()
-        : ''
+      const timestamp = createdAt || ''
 
       results.push({
         provider: 'cursor',
@@ -174,7 +173,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
         let dbSize = 0
         try { dbSize = statSync(source.path).size } catch {}
         const cacheValid = cache
-          && cache.lastCreatedAt > 0
+          && cache.lastCreatedAt.length > 0
           && cache.dbSizeBytes > 0
           && dbSize >= cache.dbSizeBytes
         const afterTimestamp = cacheValid ? cache.lastCreatedAt : undefined
@@ -183,7 +182,7 @@ function createParser(source: SessionSource, seenKeys: Set<string>): SessionPars
 
         const { calls, maxCreatedAt } = parseBubbles(db, seenKeys, afterTimestamp)
 
-        if (maxCreatedAt > 0) {
+        if (maxCreatedAt.length > 0) {
           await writeCursorCache(maxCreatedAt, dbSize).catch(() => {})
         }
 
