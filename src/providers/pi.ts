@@ -22,6 +22,7 @@ const toolNameMap: Record<string, string> = {
   glob: 'Glob',
   grep: 'Grep',
   task: 'Agent',
+  dispatch_agent: 'Agent',
   fetch: 'WebFetch',
   search: 'WebSearch',
   todo: 'TodoWrite',
