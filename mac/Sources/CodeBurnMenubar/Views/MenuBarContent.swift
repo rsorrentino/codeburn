@@ -11,9 +11,10 @@ struct MenuBarContent: View {
 
             Divider()
 
-            AgentTabStrip()
-
-            Divider()
+            if showAgentTabs {
+                AgentTabStrip()
+                Divider()
+            }
 
             ZStack {
                 ScrollView(.vertical, showsIndicators: false) {
@@ -61,6 +62,15 @@ struct MenuBarContent: View {
     private var isFilteredEmpty: Bool {
         guard store.selectedProvider != .all else { return false }
         return store.payload.current.cost <= 0 && store.payload.current.calls == 0
+    }
+
+    /// Only show the tab row when two or more providers have non-zero spend. One
+    /// provider means the tabs are redundant (the All tab already shows it); zero
+    /// providers means the popover has nothing to filter.
+    private var showAgentTabs: Bool {
+        let payload = store.todayPayload ?? store.payload
+        let active = payload.current.providers.values.filter { $0 > 0 }
+        return active.count >= 2
     }
 
 }

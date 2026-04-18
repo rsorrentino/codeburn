@@ -33,7 +33,16 @@ struct AgentTabStrip: View {
     }
 
     private var visibleFilters: [ProviderFilter] {
-        let activeKeys = Set(allProvidersToday.current.providers.keys.map { $0.lowercased() })
+        // Only surface providers that actually spent money in the all-provider view.
+        // The CLI includes zero-cost providers in the payload for completeness, so
+        // filtering on value > 0 keeps the tab row honest and avoids showing tabs
+        // for tools the user hasn't run yet.
+        let activeKeys = Set(
+            allProvidersToday.current.providers
+                .filter { $0.value > 0 }
+                .keys
+                .map { $0.lowercased() }
+        )
         return ProviderFilter.allCases.filter { filter in
             if filter == .all { return true }
             return activeKeys.contains(filter.rawValue.lowercased())
@@ -87,6 +96,8 @@ extension ProviderFilter {
         case .codex: return Theme.categoricalCodex
         case .cursor: return Theme.categoricalCursor
         case .copilot: return Color(red: 0x6D/255.0, green: 0x8F/255.0, blue: 0xA6/255.0)
+        case .opencode: return Color(red: 0x5B/255.0, green: 0x83/255.0, blue: 0x5B/255.0)
+        case .pi: return Color(red: 0xB2/255.0, green: 0x6B/255.0, blue: 0x3D/255.0)
         }
     }
 }
