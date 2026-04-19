@@ -1,3 +1,6 @@
+import { readdir, readFile } from 'fs/promises'
+import { join } from 'path'
+
 import type { ProjectSummary } from './types.js'
 
 export type ModelStats = {
@@ -138,4 +141,112 @@ export function computeComparison(a: ModelStats, b: ModelStats): ComparisonRow[]
       winner: pickWinner(valueA, valueB, m.higherIsBetter),
     }
   })
+}
+
+const SELF_CORRECTION_PATTERNS = [
+  /\bI('m| am) sorry\b/i,
+  /\bmy mistake\b/i,
+  /\bmy apolog/i,
+  /\bI made (a |an )?(error|mistake)\b/i,
+  /\bI was wrong\b/i,
+  /\bmy bad\b/i,
+  /\bI apologize\b/i,
+  /\bsorry about that\b/i,
+  /\bsorry for (the|that|this)\b/i,
+  /\bI should have\b/i,
+  /\bI shouldn't have\b/i,
+  /\bI incorrectly\b/i,
+  /\bI mistakenly\b/i,
+]
+
+function extractText(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((b): b is { type: string; text: string } => b !== null && typeof b === 'object' && b.type === 'text' && typeof b.text === 'string')
+    .map(b => b.text)
+    .join(' ')
+}
+
+async function collectJsonlFiles(sessionDir: string): Promise<string[]> {
+  const entries = await readdir(sessionDir, { withFileTypes: true })
+  const files: string[] = []
+  for (const entry of entries) {
+    if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+      files.push(join(sessionDir, entry.name))
+    } else if (entry.isDirectory() && entry.name === 'subagents') {
+      const subEntries = await readdir(join(sessionDir, entry.name), { withFileTypes: true })
+      for (const sub of subEntries) {
+        if (sub.isFile() && sub.name.endsWith('.jsonl')) {
+          files.push(join(sessionDir, entry.name, sub.name))
+        }
+      }
+    }
+  }
+  return files
+}
+
+export async function scanSelfCorrections(sessionDirs: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>()
+
+  for (const dir of sessionDirs) {
+    let sessionEntries
+    try {
+      sessionEntries = await readdir(dir, { withFileTypes: true })
+    } catch {
+      continue
+    }
+
+    for (const entry of sessionEntries) {
+      if (!entry.isDirectory()) continue
+      const sessionDir = join(dir, entry.name)
+
+      let files: string[]
+      try {
+        files = await collectJsonlFiles(sessionDir)
+      } catch {
+        continue
+      }
+
+      for (const file of files) {
+        let raw: string
+        try {
+          raw = await readFile(file, 'utf8')
+        } catch {
+          continue
+        }
+
+        for (const line of raw.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(trimmed)
+          } catch {
+            continue
+          }
+
+          if (
+            parsed === null ||
+            typeof parsed !== 'object' ||
+            (parsed as Record<string, unknown>)['type'] !== 'assistant'
+          ) continue
+
+          const msg = (parsed as Record<string, unknown>)['message']
+          if (msg === null || typeof msg !== 'object') continue
+
+          const model = (msg as Record<string, unknown>)['model']
+          if (typeof model !== 'string' || model === '<synthetic>') continue
+
+          const text = extractText((msg as Record<string, unknown>)['content'])
+          if (SELF_CORRECTION_PATTERNS.some(p => p.test(text))) {
+            counts.set(model, (counts.get(model) ?? 0) + 1)
+          }
+        }
+      }
+    }
+  }
+
+  return counts
 }

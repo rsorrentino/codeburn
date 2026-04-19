@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest'
-import { aggregateModelStats, computeComparison, type ModelStats } from '../src/compare-stats.js'
+import { mkdtemp, mkdir, rm, writeFile } from 'fs/promises'
+import { join } from 'path'
+import { tmpdir } from 'os'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { aggregateModelStats, computeComparison, scanSelfCorrections, type ModelStats } from '../src/compare-stats.js'
 import type { ProjectSummary, SessionSummary, ClassifiedTurn } from '../src/types.js'
 
 function makeTurn(model: string, cost: number, opts: { hasEdits?: boolean; retries?: number; outputTokens?: number; inputTokens?: number; cacheRead?: number; cacheWrite?: number; timestamp?: string } = {}): ClassifiedTurn {
@@ -207,5 +210,147 @@ describe('computeComparison', () => {
     expect(cacheRow.valueA).toBeCloseTo(30000 / totalA * 100)
     expect(cacheRow.valueB).toBeCloseTo(10000 / totalB * 100)
     expect(cacheRow.winner).toBe('a')
+  })
+})
+
+function jsonlLine(type: string, model: string, text: string): string {
+  if (type === 'assistant') {
+    return JSON.stringify({
+      type: 'assistant', timestamp: '2026-04-15T10:00:00Z',
+      message: { model, content: [{ type: 'text', text }], id: `msg-${Math.random()}`, usage: { input_tokens: 0, output_tokens: 0 } },
+    })
+  }
+  return JSON.stringify({ type: 'user', timestamp: '2026-04-15T10:00:00Z', message: { role: 'user', content: text } })
+}
+
+describe('scanSelfCorrections', () => {
+  let tmpDir: string
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'codeburn-test-'))
+  })
+
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true })
+  })
+
+  it('counts apology patterns per model', async () => {
+    const sessionDir = join(tmpDir, 'session-abc')
+    await mkdir(sessionDir)
+    const lines = [
+      jsonlLine('assistant', 'opus-4-6', 'I apologize for the confusion.'),
+      jsonlLine('assistant', 'opus-4-6', 'Here is the result.'),
+      jsonlLine('assistant', 'sonnet-4-6', 'I was wrong about that.'),
+      jsonlLine('user', '', 'Do this'),
+    ]
+    await writeFile(join(sessionDir, 'session.jsonl'), lines.join('\n') + '\n')
+
+    const result = await scanSelfCorrections([tmpDir])
+    expect(result.get('opus-4-6')).toBe(1)
+    expect(result.get('sonnet-4-6')).toBe(1)
+  })
+
+  it('does not count non-apology text', async () => {
+    const sessionDir = join(tmpDir, 'session-xyz')
+    await mkdir(sessionDir)
+    const lines = [
+      jsonlLine('assistant', 'opus-4-6', 'Here is the updated code.'),
+      jsonlLine('assistant', 'opus-4-6', 'Let me fix that for you.'),
+    ]
+    await writeFile(join(sessionDir, 'session.jsonl'), lines.join('\n') + '\n')
+
+    const result = await scanSelfCorrections([tmpDir])
+    expect(result.get('opus-4-6')).toBeUndefined()
+    expect(result.size).toBe(0)
+  })
+
+  it('returns empty map for missing directory', async () => {
+    const result = await scanSelfCorrections([join(tmpDir, 'nonexistent')])
+    expect(result.size).toBe(0)
+  })
+
+  it('returns empty map for empty directory', async () => {
+    const result = await scanSelfCorrections([tmpDir])
+    expect(result.size).toBe(0)
+  })
+
+  it('scans subagent directories', async () => {
+    const sessionDir = join(tmpDir, 'session-sub')
+    const subagentsDir = join(sessionDir, 'subagents')
+    await mkdir(subagentsDir, { recursive: true })
+    const lines = [
+      jsonlLine('assistant', 'haiku-4-6', 'My mistake, let me redo that.'),
+    ]
+    await writeFile(join(subagentsDir, 'sub.jsonl'), lines.join('\n') + '\n')
+
+    const result = await scanSelfCorrections([tmpDir])
+    expect(result.get('haiku-4-6')).toBe(1)
+  })
+
+  it('skips <synthetic> models', async () => {
+    const sessionDir = join(tmpDir, 'session-synth')
+    await mkdir(sessionDir)
+    const lines = [
+      jsonlLine('assistant', '<synthetic>', 'I apologize for the error.'),
+    ]
+    await writeFile(join(sessionDir, 'session.jsonl'), lines.join('\n') + '\n')
+
+    const result = await scanSelfCorrections([tmpDir])
+    expect(result.get('<synthetic>')).toBeUndefined()
+    expect(result.size).toBe(0)
+  })
+
+  it('accumulates counts across multiple sessions and directories', async () => {
+    const sessionA = join(tmpDir, 'session-a')
+    const sessionB = join(tmpDir, 'session-b')
+    await mkdir(sessionA)
+    await mkdir(sessionB)
+
+    await writeFile(join(sessionA, 'a.jsonl'), [
+      jsonlLine('assistant', 'opus-4-6', 'I was wrong.'),
+      jsonlLine('assistant', 'opus-4-6', 'My bad!'),
+    ].join('\n') + '\n')
+
+    await writeFile(join(sessionB, 'b.jsonl'), [
+      jsonlLine('assistant', 'opus-4-6', 'I apologize.'),
+    ].join('\n') + '\n')
+
+    const result = await scanSelfCorrections([tmpDir])
+    expect(result.get('opus-4-6')).toBe(3)
+  })
+
+  it('handles malformed JSON lines gracefully', async () => {
+    const sessionDir = join(tmpDir, 'session-bad')
+    await mkdir(sessionDir)
+    await writeFile(join(sessionDir, 'bad.jsonl'), [
+      'not valid json',
+      jsonlLine('assistant', 'opus-4-6', 'I apologize.'),
+    ].join('\n') + '\n')
+
+    const result = await scanSelfCorrections([tmpDir])
+    expect(result.get('opus-4-6')).toBe(1)
+  })
+
+  it('accepts multiple sessionDirs and merges counts', async () => {
+    const dir2 = await mkdtemp(join(tmpdir(), 'codeburn-test2-'))
+    try {
+      const sessionA = join(tmpDir, 'session-a')
+      const sessionB = join(dir2, 'session-b')
+      await mkdir(sessionA)
+      await mkdir(sessionB)
+
+      await writeFile(join(sessionA, 'a.jsonl'), [
+        jsonlLine('assistant', 'sonnet-4-6', 'My mistake.'),
+      ].join('\n') + '\n')
+
+      await writeFile(join(sessionB, 'b.jsonl'), [
+        jsonlLine('assistant', 'sonnet-4-6', 'I was wrong.'),
+      ].join('\n') + '\n')
+
+      const result = await scanSelfCorrections([tmpDir, dir2])
+      expect(result.get('sonnet-4-6')).toBe(2)
+    } finally {
+      await rm(dir2, { recursive: true, force: true })
+    }
   })
 })
