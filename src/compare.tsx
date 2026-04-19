@@ -84,28 +84,30 @@ function ModelSelector({ models, onSelect, onBack }: ModelSelectorProps) {
 
   return (
     <Box flexDirection="column" paddingX={2} paddingY={1}>
-      <Text bold color={ORANGE}>Model Comparison</Text>
-      <Text> </Text>
-      <Text dimColor>Select two models to compare:</Text>
-      <Text> </Text>
-      {models.map((m, i) => {
-        const isCursor = i === cursor
-        const isSelected = selected.has(i)
-        const lowData = m.calls < LOW_DATA_THRESHOLD
-        const prefix = isCursor ? '> ' : '  '
-        return (
-          <Text key={m.model}>
-            <Text color={isCursor ? ORANGE : undefined}>{prefix}</Text>
-            <Text bold={isSelected} color={isSelected ? GREEN : undefined}>
-              {m.model.padEnd(MODEL_NAME_COL)}
+      <Box flexDirection="column" borderStyle="round" borderColor={ORANGE} paddingX={1}>
+        <Text bold color={ORANGE}>Model Comparison</Text>
+        <Text> </Text>
+        <Text dimColor>Select two models to compare:</Text>
+        <Text> </Text>
+        {models.map((m, i) => {
+          const isCursor = i === cursor
+          const isSelected = selected.has(i)
+          const lowData = m.calls < LOW_DATA_THRESHOLD
+          const prefix = isCursor ? '> ' : '  '
+          return (
+            <Text key={m.model}>
+              <Text color={isCursor ? ORANGE : undefined}>{prefix}</Text>
+              <Text bold={isSelected} color={isSelected ? GREEN : undefined}>
+                {m.model.padEnd(MODEL_NAME_COL)}
+              </Text>
+              <Text>{m.calls.toLocaleString().padStart(8)} calls</Text>
+              <Text color={GOLD}>{formatCost(m.cost).padStart(10)}</Text>
+              {isSelected && <Text color={GREEN}>   [selected]</Text>}
+              {lowData && <Text color={DIM}>   low data</Text>}
             </Text>
-            <Text>{m.calls.toLocaleString().padStart(8)} calls</Text>
-            <Text color={GOLD}>{formatCost(m.cost).padStart(10)}</Text>
-            {isSelected && <Text color={GREEN}>   [selected]</Text>}
-            {lowData && <Text color={DIM}>   low data</Text>}
-          </Text>
-        )
-      })}
+          )
+        })}
+      </Box>
       <Text> </Text>
       <Text>
         <Text color={ORANGE} bold>[space]</Text><Text dimColor> select  </Text>
@@ -224,9 +226,11 @@ export function CompareView({ projects, onBack }: CompareViewProps) {
   if (models.length < 2) {
     return (
       <Box flexDirection="column" paddingX={2} paddingY={1}>
-        <Text bold color={ORANGE}>Model Comparison</Text>
-        <Text> </Text>
-        <Text dimColor>Need at least 2 models to compare. Found {models.length}.</Text>
+        <Box flexDirection="column" borderStyle="round" borderColor={ORANGE} paddingX={1}>
+          <Text bold color={ORANGE}>Model Comparison</Text>
+          <Text> </Text>
+          <Text dimColor>Need at least 2 models to compare. Found {models.length}.</Text>
+        </Box>
         <Text> </Text>
         <Text>
           <Text color={ORANGE} bold>[esc]</Text><Text dimColor> back  </Text>
@@ -260,9 +264,11 @@ export function CompareView({ projects, onBack }: CompareViewProps) {
   if (phase === 'loading') {
     return (
       <Box flexDirection="column" paddingX={2} paddingY={1}>
-        <Text bold color={ORANGE}>Model Comparison</Text>
-        <Text> </Text>
-        <Text dimColor>Scanning self-corrections...</Text>
+        <Box flexDirection="column" borderStyle="round" borderColor={ORANGE} paddingX={1}>
+          <Text bold color={ORANGE}>Model Comparison</Text>
+          <Text> </Text>
+          <Text dimColor>Scanning self-corrections...</Text>
+        </Box>
       </Box>
     )
   }
