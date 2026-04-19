@@ -201,7 +201,7 @@ type CompareViewProps = {
   onBack: () => void
 }
 
-function CompareView({ projects, onBack }: CompareViewProps) {
+export function CompareView({ projects, onBack }: CompareViewProps) {
   const { exit } = useApp()
   const [phase, setPhase] = useState<'select' | 'loading' | 'results'>('select')
   const [models] = useState(() => aggregateModelStats(projects))

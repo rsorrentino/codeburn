@@ -10,10 +10,11 @@ import { getAllProviders } from './providers/index.js'
 import { scanAndDetect, type WasteFinding, type WasteAction, type OptimizeResult } from './optimize.js'
 import { estimateContextBudget, discoverProjectCwd, type ContextBudget } from './context-budget.js'
 import { dateKey } from './day-aggregator.js'
+import { CompareView } from './compare.js'
 import { join } from 'path'
 
 type Period = 'today' | 'week' | '30days' | 'month' | 'all'
-type View = 'dashboard' | 'optimize'
+type View = 'dashboard' | 'optimize' | 'compare'
 
 const PERIODS: Period[] = ['today', 'week', '30days', 'month', 'all']
 const PERIOD_LABELS: Record<Period, string> = {
@@ -526,7 +527,7 @@ function OptimizeView({ findings, costRate, projects, label, width, healthScore,
   )
 }
 
-function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable }: { width: number; showProvider?: boolean; view?: View; findingCount?: number; optimizeAvailable?: boolean }) {
+function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable, compareAvailable }: { width: number; showProvider?: boolean; view?: View; findingCount?: number; optimizeAvailable?: boolean; compareAvailable?: boolean }) {
   const isOptimize = view === 'optimize'
   return (
     <Box borderStyle="round" borderColor={DIM} width={width} justifyContent="center" paddingX={1}>
@@ -542,6 +543,9 @@ function StatusBar({ width, showProvider, view, findingCount, optimizeAvailable 
         <Text color={ORANGE} bold>5</Text><Text dimColor> all time</Text>
         {!isOptimize && optimizeAvailable && findingCount != null && findingCount > 0 && (
           <><Text dimColor>   </Text><Text color={ORANGE} bold>o</Text><Text dimColor> optimize</Text><Text color="#F55B5B"> ({findingCount})</Text></>
+        )}
+        {!isOptimize && view !== 'compare' && compareAvailable && (
+          <><Text dimColor>   </Text><Text color={ORANGE} bold>c</Text><Text dimColor> compare</Text></>
         )}
         {showProvider && (<><Text dimColor>   </Text><Text color={ORANGE} bold>p</Text><Text dimColor> provider</Text></>)}
       </Text>
@@ -596,6 +600,10 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   const { dashWidth } = getLayout(columns)
   const multipleProviders = detectedProviders.length > 1
   const optimizeAvailable = activeProvider === 'all' || activeProvider === 'claude'
+  const modelCount = new Set(
+    projects.flatMap(p => p.sessions.flatMap(s => Object.keys(s.modelBreakdown)))
+  ).size
+  const compareAvailable = modelCount >= 2
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const findingCount = optimizeResult?.findings.length ?? 0
 
@@ -671,7 +679,8 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   useInput((input, key) => {
     if (input === 'q') { exit(); return }
     if (input === 'o' && findingCount > 0 && view === 'dashboard' && optimizeAvailable) { setView('optimize'); return }
-    if ((input === 'b' || key.escape) && view === 'optimize') { setView('dashboard'); return }
+    if ((input === 'b' || key.escape) && (view === 'optimize' || view === 'compare')) { setView('dashboard'); return }
+    if (input === 'c' && compareAvailable && view === 'dashboard') { setView('compare'); return }
     if (input === 'p' && multipleProviders) {
       const opts = ['all', ...detectedProviders]; const next = opts[(opts.indexOf(activeProvider) + 1) % opts.length]
       setActiveProvider(next); setView('dashboard')
@@ -693,7 +702,7 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
       <Box flexDirection="column" width={dashWidth}>
         <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
         <Panel title="CodeBurn" color={ORANGE} width={dashWidth}><Text dimColor>Loading {PERIOD_LABELS[period]}...</Text></Panel>
-        <StatusBar width={dashWidth} showProvider={multipleProviders} view="dashboard" findingCount={0} optimizeAvailable={false} />
+        <StatusBar width={dashWidth} showProvider={multipleProviders} view="dashboard" findingCount={0} optimizeAvailable={false} compareAvailable={false} />
       </Box>
     )
   }
@@ -701,10 +710,12 @@ function InteractiveDashboard({ initialProjects, initialPeriod, initialProvider,
   return (
     <Box flexDirection="column" width={dashWidth}>
       <PeriodTabs active={period} providerName={activeProvider} showProvider={multipleProviders} />
-      {view === 'optimize' && optimizeResult
-        ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} />
-        : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} />}
-      <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} />
+      {view === 'compare'
+        ? <CompareView projects={projects} onBack={() => setView('dashboard')} />
+        : view === 'optimize' && optimizeResult
+          ? <OptimizeView findings={optimizeResult.findings} costRate={optimizeResult.costRate} projects={projects} label={PERIOD_LABELS[period]} width={dashWidth} healthScore={optimizeResult.healthScore} healthGrade={optimizeResult.healthGrade} />
+          : <DashboardContent projects={projects} period={period} columns={columns} activeProvider={activeProvider} budgets={projectBudgets} />}
+      <StatusBar width={dashWidth} showProvider={multipleProviders} view={view} findingCount={findingCount} optimizeAvailable={optimizeAvailable} compareAvailable={compareAvailable} />
     </Box>
   )
 }
