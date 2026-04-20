@@ -41,6 +41,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+}
+
 function isManifestEntry(value: unknown): value is { file: string; provider: string; logicalPath: string } {
   return isPlainObject(value)
     && typeof value.file === 'string'
@@ -55,24 +59,82 @@ function isSessionSummary(value: unknown): value is SessionSummary {
     && typeof value.project === 'string'
     && typeof value.firstTimestamp === 'string'
     && typeof value.lastTimestamp === 'string'
-    && typeof value.totalCostUSD === 'number'
-    && Number.isFinite(value.totalCostUSD)
-    && typeof value.totalInputTokens === 'number'
-    && Number.isFinite(value.totalInputTokens)
-    && typeof value.totalOutputTokens === 'number'
-    && Number.isFinite(value.totalOutputTokens)
-    && typeof value.totalCacheReadTokens === 'number'
-    && Number.isFinite(value.totalCacheReadTokens)
-    && typeof value.totalCacheWriteTokens === 'number'
-    && Number.isFinite(value.totalCacheWriteTokens)
-    && typeof value.apiCalls === 'number'
-    && Number.isFinite(value.apiCalls)
+    && isFiniteNumber(value.totalCostUSD)
+    && isFiniteNumber(value.totalInputTokens)
+    && isFiniteNumber(value.totalOutputTokens)
+    && isFiniteNumber(value.totalCacheReadTokens)
+    && isFiniteNumber(value.totalCacheWriteTokens)
+    && isFiniteNumber(value.apiCalls)
     && Array.isArray(value.turns)
-    && isPlainObject(value.modelBreakdown)
-    && isPlainObject(value.toolBreakdown)
-    && isPlainObject(value.mcpBreakdown)
-    && isPlainObject(value.bashBreakdown)
-    && isPlainObject(value.categoryBreakdown)
+    && value.turns.every(isParsedTurn)
+    && isBreakdownMap(value.modelBreakdown, isModelBreakdownEntry)
+    && isBreakdownMap(value.toolBreakdown, isCallsBreakdownEntry)
+    && isBreakdownMap(value.mcpBreakdown, isCallsBreakdownEntry)
+    && isBreakdownMap(value.bashBreakdown, isCallsBreakdownEntry)
+    && isBreakdownMap(value.categoryBreakdown, isCategoryBreakdownEntry)
+}
+
+function isTokenUsage(value: unknown): value is { inputTokens: number; outputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number; cachedInputTokens: number; reasoningTokens: number; webSearchRequests: number } {
+  return isPlainObject(value)
+    && isFiniteNumber(value.inputTokens)
+    && isFiniteNumber(value.outputTokens)
+    && isFiniteNumber(value.cacheCreationInputTokens)
+    && isFiniteNumber(value.cacheReadInputTokens)
+    && isFiniteNumber(value.cachedInputTokens)
+    && isFiniteNumber(value.reasoningTokens)
+    && isFiniteNumber(value.webSearchRequests)
+}
+
+function isParsedApiCall(value: unknown): boolean {
+  return isPlainObject(value)
+    && typeof value.provider === 'string'
+    && typeof value.model === 'string'
+    && isTokenUsage(value.usage)
+    && isFiniteNumber(value.costUSD)
+    && Array.isArray(value.tools)
+    && value.tools.every(tool => typeof tool === 'string')
+    && Array.isArray(value.mcpTools)
+    && value.mcpTools.every(tool => typeof tool === 'string')
+    && typeof value.hasAgentSpawn === 'boolean'
+    && typeof value.hasPlanMode === 'boolean'
+    && (value.speed === 'standard' || value.speed === 'fast')
+    && typeof value.timestamp === 'string'
+    && Array.isArray(value.bashCommands)
+    && value.bashCommands.every(command => typeof command === 'string')
+    && typeof value.deduplicationKey === 'string'
+}
+
+function isParsedTurn(value: unknown): boolean {
+  return isPlainObject(value)
+    && typeof value.userMessage === 'string'
+    && Array.isArray(value.assistantCalls)
+    && value.assistantCalls.every(isParsedApiCall)
+    && typeof value.timestamp === 'string'
+    && typeof value.sessionId === 'string'
+}
+
+function isModelBreakdownEntry(value: unknown): boolean {
+  return isPlainObject(value)
+    && isFiniteNumber(value.calls)
+    && isFiniteNumber(value.costUSD)
+    && isTokenUsage(value.tokens)
+}
+
+function isCallsBreakdownEntry(value: unknown): boolean {
+  return isPlainObject(value) && isFiniteNumber(value.calls)
+}
+
+function isCategoryBreakdownEntry(value: unknown): boolean {
+  return isPlainObject(value)
+    && isFiniteNumber(value.turns)
+    && isFiniteNumber(value.costUSD)
+    && isFiniteNumber(value.retries)
+    && isFiniteNumber(value.editTurns)
+    && isFiniteNumber(value.oneShotTurns)
+}
+
+function isBreakdownMap<T>(value: unknown, predicate: (entry: unknown) => entry is T): value is Record<string, T> {
+  return isPlainObject(value) && Object.values(value).every(predicate)
 }
 
 function isAppendState(value: unknown): value is AppendState {
@@ -187,11 +249,16 @@ export async function readSourceCacheEntry(
 ): Promise<SourceCacheEntry | null> {
   const meta = manifest.entries[sourceKey(provider, logicalPath)]
   if (!meta) return null
+  if (meta.provider !== provider || meta.logicalPath !== logicalPath) return null
+
+  const expectedFile = entryFilename(provider, logicalPath)
+  if (meta.file !== expectedFile) return null
 
   try {
     const raw = await readFile(join(entryDir(), meta.file), 'utf-8')
     const entry: unknown = JSON.parse(raw)
     if (!isSourceCacheEntry(entry) || entry.version !== SOURCE_CACHE_VERSION) return null
+    if (entry.provider !== provider || entry.logicalPath !== logicalPath) return null
 
     const currentFingerprint = await computeFileFingerprint(entry.fingerprintPath)
     if (

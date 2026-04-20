@@ -15,8 +15,31 @@ import {
   computeFileFingerprint,
   type SourceCacheEntry,
 } from '../src/source-cache.js'
+import type { SessionSummary } from '../src/types.js'
 
 let root = ''
+
+function emptySession(sessionId: string, overrides: Partial<SessionSummary> = {}): SessionSummary {
+  return {
+    sessionId,
+    project: 'project',
+    firstTimestamp: '2026-04-10T00:00:00Z',
+    lastTimestamp: '2026-04-10T00:00:00Z',
+    totalCostUSD: 0,
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCacheWriteTokens: 0,
+    apiCalls: 0,
+    turns: [],
+    modelBreakdown: {},
+    toolBreakdown: {},
+    mcpBreakdown: {},
+    bashBreakdown: {},
+    categoryBreakdown: {},
+    ...overrides,
+  }
+}
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'codeburn-source-cache-'))
@@ -111,7 +134,7 @@ describe('source cache manifest', () => {
     const sourcePath = join(root, 'source.jsonl')
     await writeFile(sourcePath, 'one\n', 'utf-8')
     const manifest = await loadSourceCacheManifest()
-    const file = 'broken.json'
+    const file = `${createHash('sha1').update(`fake:${sourcePath}`).digest('hex')}.json`
     manifest.entries[`fake:${sourcePath}`] = { file, provider: 'fake', logicalPath: sourcePath }
     await saveSourceCacheManifest(manifest)
     await mkdir(join(root, 'source-cache-v1', 'entries'), { recursive: true })
@@ -124,6 +147,101 @@ describe('source cache manifest', () => {
       parserVersion: 'fake-v1',
       fingerprint: { mtimeMs: 'nope', sizeBytes: 4 },
       sessions: [],
+    }), 'utf-8')
+
+    const loaded = await readSourceCacheEntry(await loadSourceCacheManifest(), 'fake', sourcePath)
+    expect(loaded).toBeNull()
+  })
+
+  it('returns null when the manifest metadata does not match the lookup request', async () => {
+    const sourcePath = join(root, 'source.jsonl')
+    await writeFile(sourcePath, 'one\n', 'utf-8')
+    const fingerprint = await computeFileFingerprint(sourcePath)
+    const file = `${createHash('sha1').update(`fake:${sourcePath}`).digest('hex')}.json`
+    const manifest = await loadSourceCacheManifest()
+    manifest.entries[`fake:${sourcePath}`] = {
+      file,
+      provider: 'other',
+      logicalPath: sourcePath,
+    }
+    await saveSourceCacheManifest(manifest)
+    await mkdir(join(root, 'source-cache-v1', 'entries'), { recursive: true })
+    await writeFile(join(root, 'source-cache-v1', 'entries', file), JSON.stringify({
+      version: SOURCE_CACHE_VERSION,
+      provider: 'fake',
+      logicalPath: sourcePath,
+      fingerprintPath: sourcePath,
+      cacheStrategy: 'full-reparse',
+      parserVersion: 'fake-v1',
+      fingerprint,
+      sessions: [],
+    }), 'utf-8')
+
+    const loaded = await readSourceCacheEntry(await loadSourceCacheManifest(), 'fake', sourcePath)
+    expect(loaded).toBeNull()
+  })
+
+  it('returns null when a nested assistant call is malformed', async () => {
+    const sourcePath = join(root, 'source.jsonl')
+    await writeFile(sourcePath, 'one\n', 'utf-8')
+    const fingerprint = await computeFileFingerprint(sourcePath)
+    const entry: SourceCacheEntry = {
+      version: SOURCE_CACHE_VERSION,
+      provider: 'fake',
+      logicalPath: sourcePath,
+      fingerprintPath: sourcePath,
+      cacheStrategy: 'full-reparse',
+      parserVersion: 'fake-v1',
+      fingerprint,
+      sessions: [
+        emptySession('session-1', {
+          turns: [{
+            userMessage: 'hello',
+            assistantCalls: [{
+              provider: 'fake',
+              model: 'model',
+              usage: {
+                inputTokens: 1,
+                outputTokens: 1,
+                cacheCreationInputTokens: 0,
+                cacheReadInputTokens: 0,
+                cachedInputTokens: 0,
+                reasoningTokens: 0,
+                webSearchRequests: 0,
+              },
+              costUSD: 1,
+              tools: [],
+              mcpTools: [],
+              hasAgentSpawn: false,
+              hasPlanMode: false,
+              speed: 'standard',
+              timestamp: '2026-04-10T00:00:00Z',
+              bashCommands: [],
+              deduplicationKey: 'k',
+            }],
+            timestamp: '2026-04-10T00:00:00Z',
+            sessionId: 'session-1',
+          }],
+        }),
+      ],
+    }
+
+    const manifest = await loadSourceCacheManifest()
+    await writeSourceCacheEntry(manifest, entry)
+    await saveSourceCacheManifest(manifest)
+
+    await writeFile(join(root, 'source-cache-v1', 'entries', `${createHash('sha1').update(`fake:${sourcePath}`).digest('hex')}.json`), JSON.stringify({
+      ...entry,
+      sessions: [{
+        ...entry.sessions[0],
+        turns: [{
+          ...entry.sessions[0].turns[0],
+          assistantCalls: [{
+            ...entry.sessions[0].turns[0].assistantCalls[0],
+            usage: { ...entry.sessions[0].turns[0].assistantCalls[0].usage, inputTokens: 'bad' },
+          }],
+        }],
+      }],
     }), 'utf-8')
 
     const loaded = await readSourceCacheEntry(await loadSourceCacheManifest(), 'fake', sourcePath)
@@ -148,6 +266,47 @@ describe('source cache manifest', () => {
 
     const manifest = await loadSourceCacheManifest()
     await writeSourceCacheEntry(manifest, entry as SourceCacheEntry)
+    await saveSourceCacheManifest(manifest)
+
+    const loaded = await readSourceCacheEntry(await loadSourceCacheManifest(), 'fake', sourcePath)
+    expect(loaded).toBeNull()
+  })
+
+  it('returns null when a breakdown map contains malformed values', async () => {
+    const sourcePath = join(root, 'source.jsonl')
+    await writeFile(sourcePath, 'one\n', 'utf-8')
+    const fingerprint = await computeFileFingerprint(sourcePath)
+    const entry: SourceCacheEntry = {
+      version: SOURCE_CACHE_VERSION,
+      provider: 'fake',
+      logicalPath: sourcePath,
+      fingerprintPath: sourcePath,
+      cacheStrategy: 'full-reparse',
+      parserVersion: 'fake-v1',
+      fingerprint,
+      sessions: [
+        emptySession('session-2', {
+          modelBreakdown: {
+            modelA: {
+              calls: 'bad',
+              costUSD: 0,
+              tokens: {
+                inputTokens: 0,
+                outputTokens: 0,
+                cacheCreationInputTokens: 0,
+                cacheReadInputTokens: 0,
+                cachedInputTokens: 0,
+                reasoningTokens: 0,
+                webSearchRequests: 0,
+              },
+            },
+          },
+        }),
+      ],
+    }
+
+    const manifest = await loadSourceCacheManifest()
+    await writeSourceCacheEntry(manifest, entry)
     await saveSourceCacheManifest(manifest)
 
     const loaded = await readSourceCacheEntry(await loadSourceCacheManifest(), 'fake', sourcePath)
