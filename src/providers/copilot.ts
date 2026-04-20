@@ -179,7 +179,15 @@ async function discoverSessionsInDir(sessionStateDir: string): Promise<SessionSo
       if (cwd) project = basename(cwd)
     }
 
-    sources.push({ path: eventsPath, project, provider: 'copilot' })
+    sources.push({
+      path: eventsPath,
+      project,
+      provider: 'copilot',
+      fingerprintPath: eventsPath,
+      cacheStrategy: 'append-jsonl',
+      progressLabel: basename(eventsPath),
+      parserVersion: 'copilot:v1',
+    })
   }
 
   return sources

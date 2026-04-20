@@ -100,7 +100,15 @@ async function discoverSessionsInDir(sessionsDir: string): Promise<SessionSource
       if (!first || first.type !== 'session') continue
 
       const cwd = first.cwd ?? dirName
-      sources.push({ path: filePath, project: basename(cwd), provider: 'pi' })
+      sources.push({
+        path: filePath,
+        project: basename(cwd),
+        provider: 'pi',
+        fingerprintPath: filePath,
+        cacheStrategy: 'append-jsonl',
+        progressLabel: basename(filePath),
+        parserVersion: 'pi:v1',
+      })
     }
   }
 
