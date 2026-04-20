@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+- **Persistent parse cache for all providers.** Repeated CLI runs now reuse parsed source summaries across fresh processes instead of reparsing raw logs every time.
+- **`--no-cache` on parse-backed commands.** `report`, `today`, `month`, `status`, `export`, `optimize`, and `compare` can bypass cached entries for that run and rebuild them from raw logs.
+- **`Updating cache` stderr progress.** Non-JSON cold or partial cache rebuilds now show progress while CodeBurn refreshes changed sources.
+
+### Changed
+- **Cursor now uses the shared parse cache.** The provider-specific Cursor cache path is gone; SQLite-backed provider data now flows through the same persistent cache layer as the other providers.
+
 ## 0.8.0 - 2026-04-19
 
 ### Added

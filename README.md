@@ -80,6 +80,25 @@ codeburn today --format json | jq '.overview.cost'
 
 For the lighter `status --format json` (today + month totals only) or file-based exports (`export -f json`), see above.
 
+## Cache behavior
+
+CodeBurn now keeps a persistent parse cache under `~/.cache/codeburn/source-cache-v1/`.
+It applies to every provider. Unchanged sources load from cache across fresh CLI runs,
+while changed sources are refreshed on demand so rolling windows like `today` stay current
+as new log entries land.
+
+Use `--no-cache` on any command that reads session data to ignore cached entries for that
+run and rebuild them from raw logs:
+
+```bash
+codeburn today --no-cache
+codeburn report --period all --no-cache
+codeburn export --no-cache
+```
+
+When a non-JSON command needs to rebuild part of the cache, CodeBurn shows an
+`Updating cache` progress bar on stderr. JSON output stays clean on stdout.
+
 ## Providers
 
 CodeBurn auto-detects which AI coding tools you use. If multiple providers have session data on disk, press `p` in the dashboard to toggle between them.
