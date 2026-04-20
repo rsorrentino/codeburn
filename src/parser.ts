@@ -3,7 +3,15 @@ import { basename, join } from 'path'
 import { readSessionFile } from './fs-utils.js'
 import { calculateCost, getShortModelName } from './models.js'
 import { discoverAllSessions, getProvider } from './providers/index.js'
-import type { ParsedProviderCall } from './providers/types.js'
+import type { ParsedProviderCall, Provider, SessionSource } from './providers/types.js'
+import {
+  computeFileFingerprint,
+  loadSourceCacheManifest,
+  readSourceCacheEntry,
+  saveSourceCacheManifest,
+  SOURCE_CACHE_VERSION,
+  writeSourceCacheEntry,
+} from './source-cache.js'
 import type {
   AssistantMessageContent,
   ClassifiedTurn,
@@ -260,6 +268,65 @@ function buildSessionSummary(
   }
 }
 
+export type SourceProgressReporter = {
+  start(label: string, total: number): void
+  advance(itemLabel: string): void
+  finish(): void
+}
+
+export type ParseOptions = {
+  noCache?: boolean
+  progress?: SourceProgressReporter | null
+}
+
+function addSessionToProjectMap(projectMap: Map<string, SessionSummary[]>, session: SessionSummary) {
+  if (session.apiCalls === 0) return
+  const existing = projectMap.get(session.project) ?? []
+  existing.push(session)
+  projectMap.set(session.project, existing)
+}
+
+function buildProjects(projectMap: Map<string, SessionSummary[]>): ProjectSummary[] {
+  const projects: ProjectSummary[] = []
+  for (const [dirName, sessions] of projectMap) {
+    projects.push({
+      project: dirName,
+      projectPath: unsanitizePath(dirName),
+      sessions,
+      totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
+      totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
+    })
+  }
+  return projects
+}
+
+function filterSessionSummaryToRange(session: SessionSummary, dateRange?: DateRange): SessionSummary | null {
+  if (!dateRange) return session
+
+  const turns = session.turns
+    .map(turn => ({
+      ...turn,
+      assistantCalls: turn.assistantCalls.filter(call => {
+        const ts = new Date(call.timestamp)
+        return ts >= dateRange.start && ts <= dateRange.end
+      }),
+    }))
+    .filter(turn => turn.assistantCalls.length > 0)
+
+  if (turns.length === 0) return null
+  return buildSessionSummary(session.sessionId, session.project, turns)
+}
+
+function addSeenKeysFromSessions(sessions: SessionSummary[], seenKeys: Set<string>) {
+  for (const session of sessions) {
+    for (const turn of session.turns) {
+      for (const call of turn.assistantCalls) {
+        seenKeys.add(call.deduplicationKey)
+      }
+    }
+  }
+}
+
 async function parseSessionFile(
   filePath: string,
   project: string,
@@ -328,26 +395,11 @@ async function scanProjectDirs(dirs: Array<{ path: string; name: string }>, seen
 
     for (const filePath of jsonlFiles) {
       const session = await parseSessionFile(filePath, dirName, seenMsgIds, dateRange)
-      if (session && session.apiCalls > 0) {
-        const existing = projectMap.get(dirName) ?? []
-        existing.push(session)
-        projectMap.set(dirName, existing)
-      }
+      if (session) addSessionToProjectMap(projectMap, session)
     }
   }
 
-  const projects: ProjectSummary[] = []
-  for (const [dirName, sessions] of projectMap) {
-    projects.push({
-      project: dirName,
-      projectPath: unsanitizePath(dirName),
-      sessions,
-      totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
-      totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
-    })
-  }
-
-  return projects
+  return buildProjects(projectMap)
 }
 
 function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
@@ -387,82 +439,105 @@ function providerCallToTurn(call: ParsedProviderCall): ParsedTurn {
 
 async function parseProviderSources(
   providerName: string,
-  sources: Array<{ path: string; project: string }>,
+  sources: SessionSource[],
   seenKeys: Set<string>,
   dateRange?: DateRange,
+  options: ParseOptions = {},
 ): Promise<ProjectSummary[]> {
-  const provider = await getProvider(providerName)
-  if (!provider) return []
-
-  const sessionMap = new Map<string, { project: string; turns: ClassifiedTurn[] }>()
-
-  for (const source of sources) {
-    if (dateRange) {
-      try {
-        const s = await stat(source.path)
-        if (s.mtimeMs < dateRange.start.getTime()) continue
-      } catch { /* fall through; treat unknown stat as "may contain data" */ }
-    }
-    const parser = provider.createSessionParser(
-      { path: source.path, project: source.project, provider: providerName },
-      seenKeys,
-    )
-
-    for await (const call of parser.parse()) {
-      if (dateRange) {
-        if (!call.timestamp) continue
-        const ts = new Date(call.timestamp)
-        if (ts < dateRange.start || ts > dateRange.end) continue
-      }
-
-      const turn = providerCallToTurn(call)
-      const classified = classifyTurn(turn)
-      const key = `${providerName}:${call.sessionId}:${source.project}`
-
-      const existing = sessionMap.get(key)
-      if (existing) {
-        existing.turns.push(classified)
-      } else {
-        sessionMap.set(key, { project: source.project, turns: [classified] })
-      }
-    }
-  }
-
   const projectMap = new Map<string, SessionSummary[]>()
-  for (const [key, { project, turns }] of sessionMap) {
-    const sessionId = key.split(':')[1] ?? key
-    const session = buildSessionSummary(sessionId, project, turns)
-    if (session.apiCalls > 0) {
-      const existing = projectMap.get(project) ?? []
-      existing.push(session)
-      projectMap.set(project, existing)
+  const manifest = await loadSourceCacheManifest()
+  const sourceStates = await Promise.all(sources.map(async source => {
+    const parserVersion = source.parserVersion ?? `${providerName}:v1`
+    const cached = options.noCache
+      ? null
+      : await readSourceCacheEntry(manifest, providerName, source.path)
+
+    if (cached && cached.parserVersion === parserVersion) {
+      return { source, parserVersion, cachedSessions: cached.sessions }
     }
+
+    return { source, parserVersion, cachedSessions: null }
+  }))
+
+  const refreshCount = sourceStates.filter(state => state.cachedSessions === null).length
+  let provider: Provider | undefined
+  let wroteManifest = false
+
+  if (refreshCount > 0) options.progress?.start('Updating cache', refreshCount)
+
+  try {
+    for (const state of sourceStates) {
+      let fullSessions = state.cachedSessions
+
+      if (fullSessions) {
+        addSeenKeysFromSessions(fullSessions, seenKeys)
+      } else {
+        provider ??= await getProvider(providerName)
+        if (!provider) continue
+
+        options.progress?.advance(state.source.progressLabel ?? state.source.path)
+        fullSessions = await parseFreshProviderSource(provider, providerName, state.source, seenKeys)
+
+        const fingerprintPath = state.source.fingerprintPath ?? state.source.path
+        await writeSourceCacheEntry(manifest, {
+          version: SOURCE_CACHE_VERSION,
+          provider: providerName,
+          logicalPath: state.source.path,
+          fingerprintPath,
+          cacheStrategy: state.source.cacheStrategy ?? 'full-reparse',
+          parserVersion: state.parserVersion,
+          fingerprint: await computeFileFingerprint(fingerprintPath),
+          sessions: fullSessions,
+        })
+        wroteManifest = true
+      }
+
+      for (const session of fullSessions
+        .map(session => filterSessionSummaryToRange(session, dateRange))
+        .filter((session): session is SessionSummary => session !== null)) {
+        addSessionToProjectMap(projectMap, session)
+      }
+    }
+  } finally {
+    if (refreshCount > 0) options.progress?.finish()
   }
 
-  const projects: ProjectSummary[] = []
-  for (const [dirName, sessions] of projectMap) {
-    projects.push({
-      project: dirName,
-      projectPath: unsanitizePath(dirName),
-      sessions,
-      totalCostUSD: sessions.reduce((s, sess) => s + sess.totalCostUSD, 0),
-      totalApiCalls: sessions.reduce((s, sess) => s + sess.apiCalls, 0),
-    })
-  }
+  if (wroteManifest) await saveSourceCacheManifest(manifest)
 
-  return projects
+  return buildProjects(projectMap)
 }
 
 const CACHE_TTL_MS = 60_000
 const MAX_CACHE_ENTRIES = 10
-const sessionCache = new Map<string, { data: ProjectSummary[]; ts: number }>()
+const sessionCache = new Map<string, { data: ProjectSummary[]; sourceSignature: string; ts: number }>()
 
-function cacheKey(dateRange?: DateRange, providerFilter?: string): string {
+function cacheKey(dateRange?: DateRange, providerFilter?: string, noCache = false): string {
   const s = dateRange ? `${dateRange.start.getTime()}:${dateRange.end.getTime()}` : 'none'
-  return `${s}:${providerFilter ?? 'all'}`
+  return `${s}:${providerFilter ?? 'all'}:${noCache ? 'nocache' : 'cache'}`
 }
 
-function cachePut(key: string, data: ProjectSummary[]) {
+async function sourceSignatureForCache(sources: SessionSource[]): Promise<string> {
+  const fingerprints = await Promise.all(sources.map(async source => {
+    const fingerprintPath = source.fingerprintPath ?? source.path
+    try {
+      const meta = await stat(fingerprintPath)
+      return [
+        source.provider,
+        source.project,
+        source.path,
+        fingerprintPath,
+        String(meta.mtimeMs),
+        String(meta.size),
+      ].join(':')
+    } catch {
+      return [source.provider, source.project, source.path, fingerprintPath, 'missing'].join(':')
+    }
+  }))
+
+  return fingerprints.sort().join('|')
+}
+
+function cachePut(key: string, data: ProjectSummary[], sourceSignature: string) {
   const now = Date.now()
   for (const [k, v] of sessionCache) {
     if (now - v.ts > CACHE_TTL_MS) sessionCache.delete(k)
@@ -471,7 +546,7 @@ function cachePut(key: string, data: ProjectSummary[]) {
     const oldest = [...sessionCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0]
     if (oldest) sessionCache.delete(oldest[0])
   }
-  sessionCache.set(key, { data, ts: now })
+  sessionCache.set(key, { data, sourceSignature, ts: now })
 }
 
 export function filterProjectsByName(
@@ -499,14 +574,49 @@ export function filterProjectsByName(
   return result
 }
 
-export async function parseAllSessions(dateRange?: DateRange, providerFilter?: string): Promise<ProjectSummary[]> {
-  const key = cacheKey(dateRange, providerFilter)
+async function parseFreshProviderSource(
+  provider: Provider,
+  providerName: string,
+  source: SessionSource,
+  seenKeys: Set<string>,
+): Promise<SessionSummary[]> {
+  const sessionMap = new Map<string, { project: string; turns: ClassifiedTurn[] }>()
+  const parser = provider.createSessionParser(source, seenKeys)
+
+  for await (const call of parser.parse()) {
+    const turn = providerCallToTurn(call)
+    const classified = classifyTurn(turn)
+    const key = `${providerName}:${call.sessionId}:${source.project}`
+    const existing = sessionMap.get(key)
+
+    if (existing) {
+      existing.turns.push(classified)
+    } else {
+      sessionMap.set(key, { project: source.project, turns: [classified] })
+    }
+  }
+
+  return [...sessionMap.entries()].map(([key, value]) => {
+    const sessionId = key.split(':')[1] ?? key
+    return buildSessionSummary(sessionId, value.project, value.turns)
+  })
+}
+
+export async function parseAllSessions(
+  dateRange?: DateRange,
+  providerFilter?: string,
+  options: ParseOptions = {},
+): Promise<ProjectSummary[]> {
+  const key = cacheKey(dateRange, providerFilter, options.noCache === true)
+  const allSources = await discoverAllSessions(providerFilter)
+  const sourceSignature = await sourceSignatureForCache(allSources)
   const cached = sessionCache.get(key)
-  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) return cached.data
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS && cached.sourceSignature === sourceSignature) {
+    return cached.data
+  }
 
   const seenMsgIds = new Set<string>()
   const seenKeys = new Set<string>()
-  const allSources = await discoverAllSessions(providerFilter)
 
   const claudeSources = allSources.filter(s => s.provider === 'claude')
   const nonClaudeSources = allSources.filter(s => s.provider !== 'claude')
@@ -514,16 +624,16 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
   const claudeDirs = claudeSources.map(s => ({ path: s.path, name: s.project }))
   const claudeProjects = await scanProjectDirs(claudeDirs, seenMsgIds, dateRange)
 
-  const providerGroups = new Map<string, Array<{ path: string; project: string }>>()
+  const providerGroups = new Map<string, SessionSource[]>()
   for (const source of nonClaudeSources) {
     const existing = providerGroups.get(source.provider) ?? []
-    existing.push({ path: source.path, project: source.project })
+    existing.push(source)
     providerGroups.set(source.provider, existing)
   }
 
   const otherProjects: ProjectSummary[] = []
   for (const [providerName, sources] of providerGroups) {
-    const projects = await parseProviderSources(providerName, sources, seenKeys, dateRange)
+    const projects = await parseProviderSources(providerName, sources, seenKeys, dateRange, options)
     otherProjects.push(...projects)
   }
 
@@ -540,6 +650,6 @@ export async function parseAllSessions(dateRange?: DateRange, providerFilter?: s
   }
 
   const result = Array.from(mergedMap.values()).sort((a, b) => b.totalCostUSD - a.totalCostUSD)
-  cachePut(key, result)
+  cachePut(key, result, sourceSignature)
   return result
 }

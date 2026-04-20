@@ -2,6 +2,10 @@ export type SessionSource = {
   path: string
   project: string
   provider: string
+  fingerprintPath?: string
+  cacheStrategy?: 'full-reparse' | 'append-jsonl'
+  progressLabel?: string
+  parserVersion?: string
 }
 
 export type SessionParser = {
