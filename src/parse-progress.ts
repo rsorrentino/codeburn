@@ -1,5 +1,6 @@
-import { Chalk } from 'chalk'
 import { stripVTControlCharacters } from 'node:util'
+
+import { Chalk } from 'chalk'
 
 import type { SourceProgressReporter } from './parser.js'
 import { providerColor, providerLabel } from './provider-colors.js'

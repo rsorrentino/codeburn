@@ -655,19 +655,19 @@ async function evaluateSourceManifestState(
 
   if (!manifestEntry) {
     const state: SourceManifestState = { source, parserVersion, manifestEntry, action: 'refresh', reason: 'missing-entry' }
-    logCacheDebug(source.provider, source.path, state.reason)
+    logCacheDebug(source.provider, source.path, state.reason!)
     return state
   }
 
   if (manifestEntry.lastSeenParserVersion !== parserVersion) {
     const state: SourceManifestState = { source, parserVersion, manifestEntry, action: 'refresh', reason: 'parser-version' }
-    logCacheDebug(source.provider, source.path, state.reason)
+    logCacheDebug(source.provider, source.path, state.reason!)
     return state
   }
 
   if (source.cacheStrategy && manifestEntry.cacheStrategy && source.cacheStrategy !== manifestEntry.cacheStrategy) {
     const state: SourceManifestState = { source, parserVersion, manifestEntry, action: 'refresh', reason: 'parser-version' }
-    logCacheDebug(source.provider, source.path, state.reason)
+    logCacheDebug(source.provider, source.path, state.reason!)
     return state
   }
 
@@ -678,14 +678,14 @@ async function evaluateSourceManifestState(
 
   if (!manifestEntry.fingerprint || manifestEntry.fingerprintPath !== fingerprintPath) {
     const state: SourceManifestState = { source, parserVersion, manifestEntry, action: 'refresh', reason: 'fingerprint-miss' }
-    logCacheDebug(source.provider, source.path, state.reason)
+    logCacheDebug(source.provider, source.path, state.reason!)
     return state
   }
 
   const currentFingerprint = await computeFileFingerprint(fingerprintPath).catch(() => null)
   if (!currentFingerprint) {
     const state: SourceManifestState = { source, parserVersion, manifestEntry, action: 'refresh', reason: 'fingerprint-miss' }
-    logCacheDebug(source.provider, source.path, state.reason)
+    logCacheDebug(source.provider, source.path, state.reason!)
     return state
   }
 
@@ -720,7 +720,7 @@ async function evaluateSourceManifestState(
   }
 
   const state: SourceManifestState = { source, parserVersion, manifestEntry, action: 'refresh', reason: 'fingerprint-miss', currentFingerprint }
-  logCacheDebug(source.provider, source.path, state.reason)
+  logCacheDebug(source.provider, source.path, state.reason!)
   return state
 }
 
@@ -779,7 +779,7 @@ async function refreshClaudeCacheUnit(
     && !!cached.appendState
     && cached.sessions.length > 0
     && !!state.currentFingerprint
-  if (shouldUseAppendOnly && manifestAppendState) {
+  if (shouldUseAppendOnly && manifestAppendState && cached?.appendState) {
     if (
       manifestAppendState.tailHash !== cached.appendState.tailHash
       || manifestAppendState.endOffset !== cached.appendState.endOffset
@@ -789,7 +789,7 @@ async function refreshClaudeCacheUnit(
     }
   }
 
-  if (shouldUseAppendOnly && cached) {
+  if (shouldUseAppendOnly && cached && cached.appendState) {
     addSeenDeduplicationKeysFromSessions(cached.sessions, localSeenMsgIds)
     const appendedLines: string[] = []
     for await (const line of readSessionLinesFromOffset(unit.path, cached.appendState.endOffset)) {

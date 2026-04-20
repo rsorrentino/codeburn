@@ -16,14 +16,14 @@ function traceCacheRead(op: string, filePath: string, note?: string): void {
 
 const APPEND_TAIL_WINDOW_BYTES = 16 * 1024
 
-export type SourceCacheStrategy = 'full-reparse' | 'append-jsonl'
+type SourceCacheStrategy = 'full-reparse' | 'append-jsonl'
 
-export type SourceFingerprint = {
+type SourceFingerprint = {
   mtimeMs: number
   sizeBytes: number
 }
 
-export type AppendState = {
+type AppendState = {
   endOffset: number
   tailHash: string
   lastEntryType?: string
@@ -59,18 +59,16 @@ export type SourceCacheManifestEntry = {
   appendState?: AppendState
 }
 
-export type ReadSourceCacheEntryOptions = {
+type ReadSourceCacheEntryOptions = {
   allowStaleFingerprint?: boolean
 }
 
-export type SourceRange = {
+type SourceRange = {
   firstTimestamp?: string
   lastTimestamp?: string
 }
 
-export type CachedSourcePlanHint = SourceCacheManifestEntry & SourceRange
-
-export function sourceCacheKey(provider: string, logicalPath: string): string {
+function sourceCacheKey(provider: string, logicalPath: string): string {
   return `${provider}:${logicalPath}`
 }
 
@@ -174,18 +172,20 @@ function isParsedTurn(value: unknown): boolean {
     && typeof value.sessionId === 'string'
 }
 
-function isModelBreakdownEntry(value: unknown): boolean {
+function isModelBreakdownEntry(value: unknown): value is { calls: number; costUSD: number; tokens: TokenUsage } {
   return isPlainObject(value)
     && isFiniteNumber(value.calls)
     && isFiniteNumber(value.costUSD)
     && isTokenUsage(value.tokens)
 }
 
-function isCallsBreakdownEntry(value: unknown): boolean {
+type TokenUsage = { inputTokens: number; outputTokens: number; cacheCreationInputTokens: number; cacheReadInputTokens: number; cachedInputTokens: number; reasoningTokens: number; webSearchRequests: number }
+
+function isCallsBreakdownEntry(value: unknown): value is { calls: number } {
   return isPlainObject(value) && isFiniteNumber(value.calls)
 }
 
-function isCategoryBreakdownEntry(value: unknown): boolean {
+function isCategoryBreakdownEntry(value: unknown): value is { turns: number; costUSD: number; retries: number; editTurns: number; oneShotTurns: number } {
   return isPlainObject(value)
     && isFiniteNumber(value.turns)
     && isFiniteNumber(value.costUSD)
@@ -343,9 +343,7 @@ async function atomicWriteJson(path: string, value: unknown): Promise<void> {
   } catch (err) {
     try {
       await unlink(temp)
-    } catch {
-      // ignore cleanup failures
-    }
+    } catch {}
     throw err
   }
 }

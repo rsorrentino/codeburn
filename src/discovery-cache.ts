@@ -143,9 +143,7 @@ async function atomicWriteJson(path: string, value: unknown): Promise<void> {
   } catch (err) {
     try {
       await unlink(temp)
-    } catch {
-      // ignore cleanup failures
-    }
+    } catch {}
     throw err
   }
 }
