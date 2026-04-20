@@ -18,6 +18,7 @@ export type SourceFingerprint = {
 export type AppendState = {
   endOffset: number
   tailHash: string
+  lastEntryType?: string
 }
 
 export type SourceCacheEntry = {
@@ -146,6 +147,7 @@ function isAppendState(value: unknown): value is AppendState {
     && typeof value.endOffset === 'number'
     && Number.isFinite(value.endOffset)
     && typeof value.tailHash === 'string'
+    && (value.lastEntryType === undefined || typeof value.lastEntryType === 'string')
 }
 
 function isSourceCacheEntry(value: unknown): value is SourceCacheEntry {

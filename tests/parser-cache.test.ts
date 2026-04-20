@@ -210,4 +210,101 @@ describe('parseAllSessions source cache', () => {
     const second = await parseAllSessions(undefined, 'claude')
     expect(second.find(project => project.project === 'demo-project')?.totalApiCalls).toBe(2)
   })
+
+  it('falls back to a full Claude reparse when cached tail verification fails', async () => {
+    vi.doUnmock('../src/providers/index.js')
+    vi.resetModules()
+    const { parseAllSessions } = await import('../src/parser.js')
+    await parseAllSessions(undefined, 'claude')
+
+    const cacheRoot = join(root, 'cache', 'source-cache-v1')
+    const manifest = JSON.parse(await readFile(join(cacheRoot, 'manifest.json'), 'utf-8')) as {
+      entries: Record<string, { file: string }>
+    }
+    const entryPath = join(cacheRoot, 'entries', manifest.entries[`claude:${claudeSessionPath}`]!.file)
+    const entry = JSON.parse(await readFile(entryPath, 'utf-8')) as {
+      appendState?: { tailHash?: string }
+    }
+    entry.appendState = { ...entry.appendState, tailHash: 'broken-tail-hash' }
+    await writeFile(entryPath, JSON.stringify(entry), 'utf-8')
+
+    await appendFile(claudeSessionPath, [
+      JSON.stringify({
+        type: 'user',
+        timestamp: '2026-04-20T09:05:00.000Z',
+        sessionId: 'sess-1',
+        message: { role: 'user', content: 'second' },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: '2026-04-20T09:05:01.000Z',
+        message: {
+          id: 'msg-2',
+          model: 'claude-sonnet-4-6',
+          role: 'assistant',
+          type: 'message',
+          content: [],
+          usage: { input_tokens: 11, output_tokens: 21 },
+        },
+      }),
+    ].join('\n') + '\n', 'utf-8')
+
+    vi.resetModules()
+    const readSessionFileCalls: string[] = []
+    const readSessionLinesFromOffsetCalls: Array<[string, number]> = []
+    vi.doMock('../src/fs-utils.js', async () => {
+      const actual = await vi.importActual<typeof import('../src/fs-utils.js')>('../src/fs-utils.js')
+      return {
+        ...actual,
+        readSessionFile: vi.fn(async (filePath: string) => {
+          readSessionFileCalls.push(filePath)
+          return actual.readSessionFile(filePath)
+        }),
+        readSessionLinesFromOffset: vi.fn(async function* (filePath: string, startOffset: number) {
+          readSessionLinesFromOffsetCalls.push([filePath, startOffset])
+          for await (const line of actual.readSessionLinesFromOffset(filePath, startOffset)) {
+            yield line
+          }
+        }),
+      }
+    })
+
+    const { parseAllSessions: reparsedParseAllSessions } = await import('../src/parser.js')
+    const reparsed = await reparsedParseAllSessions(undefined, 'claude')
+
+    expect(reparsed.find(project => project.project === 'demo-project')?.totalApiCalls).toBe(2)
+    expect(readSessionFileCalls).toContain(claudeSessionPath)
+    expect(readSessionLinesFromOffsetCalls).toHaveLength(0)
+  })
+
+  it('keeps appended assistant-only Claude entries inside the existing turn', async () => {
+    vi.doUnmock('../src/providers/index.js')
+    vi.resetModules()
+    const { parseAllSessions } = await import('../src/parser.js')
+
+    const first = await parseAllSessions(undefined, 'claude')
+    const initialSession = first.find(project => project.project === 'demo-project')?.sessions[0]
+    expect(initialSession?.turns).toHaveLength(1)
+
+    await appendFile(claudeSessionPath, JSON.stringify({
+      type: 'assistant',
+      timestamp: '2026-04-20T09:05:01.000Z',
+      message: {
+        id: 'msg-2',
+        model: 'claude-sonnet-4-6',
+        role: 'assistant',
+        type: 'message',
+        content: [],
+        usage: { input_tokens: 11, output_tokens: 21 },
+      },
+    }) + '\n', 'utf-8')
+
+    const second = await parseAllSessions(undefined, 'claude')
+    const session = second.find(project => project.project === 'demo-project')?.sessions[0]
+
+    expect(session?.apiCalls).toBe(2)
+    expect(session?.turns).toHaveLength(1)
+    expect(session?.turns[0]?.userMessage).toBe('first')
+    expect(session?.turns[0]?.assistantCalls).toHaveLength(2)
+  })
 })

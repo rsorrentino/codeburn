@@ -1,5 +1,5 @@
 import { createHash } from 'crypto'
-import { readdir, stat } from 'fs/promises'
+import { open, readdir, stat } from 'fs/promises'
 import { basename, join } from 'path'
 import { readSessionFile, readSessionLinesFromOffset } from './fs-utils.js'
 import { calculateCost, getShortModelName } from './models.js'
@@ -410,6 +410,13 @@ type ClaudeCacheUnit = {
   progressLabel: string
 }
 
+type ClaudeTailState = {
+  tailHash: string
+  lastEntryType?: string
+}
+
+const CLAUDE_TAIL_WINDOW_BYTES = 16 * 1024
+
 async function listClaudeCacheUnits(dirPath: string, dirName: string): Promise<ClaudeCacheUnit[]> {
   const jsonlFiles = await collectJsonlFiles(dirPath)
   return jsonlFiles.map(filePath => ({
@@ -419,15 +426,83 @@ async function listClaudeCacheUnits(dirPath: string, dirName: string): Promise<C
   }))
 }
 
-function appendStateTailHash(session: SessionSummary): string {
-  return createHash('sha1').update(session.lastTimestamp).digest('hex')
-}
-
 function fingerprintsMatch(
   left: { mtimeMs: number; sizeBytes: number },
   right: { mtimeMs: number; sizeBytes: number },
 ): boolean {
   return left.mtimeMs === right.mtimeMs && left.sizeBytes === right.sizeBytes
+}
+
+async function readClaudeTailState(filePath: string, endOffset: number): Promise<ClaudeTailState | null> {
+  const start = Math.max(0, endOffset - CLAUDE_TAIL_WINDOW_BYTES)
+  const length = Math.max(0, endOffset - start)
+  if (length === 0) return null
+
+  const handle = await open(filePath, 'r')
+  const buffer = Buffer.alloc(length)
+
+  try {
+    await handle.read(buffer, 0, length, start)
+  } finally {
+    await handle.close()
+  }
+
+  const chunk = buffer.toString('utf-8').replace(/[\r\n]+$/, '')
+  if (chunk.length === 0) return null
+
+  const lastNewline = chunk.lastIndexOf('\n')
+  if (lastNewline < 0 && start > 0) return null
+
+  const lastLine = lastNewline >= 0 ? chunk.slice(lastNewline + 1) : chunk
+  if (!lastLine.trim()) return null
+
+  const entry = parseJsonlLine(lastLine)
+  return {
+    tailHash: createHash('sha1').update(lastLine).digest('hex'),
+    lastEntryType: entry?.type,
+  }
+}
+
+async function buildClaudeAppendState(filePath: string, endOffset: number): Promise<{
+  endOffset: number
+  tailHash: string
+  lastEntryType?: string
+}> {
+  const tailState = await readClaudeTailState(filePath, endOffset)
+  return {
+    endOffset,
+    tailHash: tailState?.tailHash ?? '',
+    lastEntryType: tailState?.lastEntryType,
+  }
+}
+
+function mergeClaudeAppendSession(
+  cachedSession: SessionSummary,
+  appendedSession: SessionSummary,
+  lastEntryType?: string,
+): SessionSummary | null {
+  const mergedTurns = [...cachedSession.turns]
+  const appendedTurns = [...appendedSession.turns]
+  const firstAppendedTurn = appendedTurns[0]
+
+  if (firstAppendedTurn && firstAppendedTurn.userMessage === '') {
+    if (lastEntryType !== 'assistant' || mergedTurns.length === 0) return null
+
+    const previousTurn = mergedTurns[mergedTurns.length - 1]!
+    mergedTurns[mergedTurns.length - 1] = classifyTurn({
+      userMessage: previousTurn.userMessage,
+      assistantCalls: [...previousTurn.assistantCalls, ...firstAppendedTurn.assistantCalls],
+      timestamp: previousTurn.timestamp,
+      sessionId: previousTurn.sessionId,
+    })
+    appendedTurns.shift()
+  }
+
+  return buildSessionSummary(
+    cachedSession.sessionId,
+    cachedSession.project,
+    [...mergedTurns, ...appendedTurns],
+  )
 }
 
 async function refreshClaudeCacheUnit(
@@ -460,42 +535,52 @@ async function refreshClaudeCacheUnit(
     && cached.appendState
     && fingerprint.sizeBytes > cached.fingerprint.sizeBytes
   ) {
-    reportedRefresh = true
-    options.progress?.advance(unit.progressLabel)
-    addSeenDeduplicationKeysFromSessions(cached.sessions, seenMsgIds)
-    const appendedLines: string[] = []
-    for await (const line of readSessionLinesFromOffset(unit.path, cached.appendState.endOffset)) {
-      if (line.trim()) appendedLines.push(line)
-    }
-
-    const appended = buildClaudeSessionSummaryFromLines(
-      appendedLines,
-      unit.project,
-      seenMsgIds,
-      cached.sessions[0]?.sessionId ?? basename(unit.path, '.jsonl'),
+    const currentTailState = await readClaudeTailState(unit.path, cached.appendState.endOffset)
+    const tailMatches = !!(
+      currentTailState
+      && cached.appendState.tailHash
+      && currentTailState.tailHash === cached.appendState.tailHash
     )
 
-    if (appended && cached.sessions[0]) {
-      const merged = buildSessionSummary(
-        cached.sessions[0].sessionId,
+    if (tailMatches) {
+      reportedRefresh = true
+      options.progress?.advance(unit.progressLabel)
+      addSeenDeduplicationKeysFromSessions(cached.sessions, seenMsgIds)
+
+      const appendedLines: string[] = []
+      for await (const line of readSessionLinesFromOffset(unit.path, cached.appendState.endOffset)) {
+        if (line.trim()) appendedLines.push(line)
+      }
+
+      const appended = buildClaudeSessionSummaryFromLines(
+        appendedLines,
         unit.project,
-        [...cached.sessions[0].turns, ...appended.turns],
+        seenMsgIds,
+        cached.sessions[0]?.sessionId ?? basename(unit.path, '.jsonl'),
       )
-      await writeSourceCacheEntry(manifest, {
-        version: SOURCE_CACHE_VERSION,
-        provider: 'claude',
-        logicalPath: unit.path,
-        fingerprintPath: unit.path,
-        cacheStrategy: 'append-jsonl',
-        parserVersion,
-        fingerprint,
-        sessions: [merged],
-        appendState: {
-          endOffset: fingerprint.sizeBytes,
-          tailHash: appendStateTailHash(merged),
-        },
-      })
-      return { session: merged, wrote: true, refreshed: true }
+
+      if (appended && cached.sessions[0]) {
+        const merged = mergeClaudeAppendSession(
+          cached.sessions[0],
+          appended,
+          cached.appendState.lastEntryType,
+        )
+
+        if (merged) {
+          await writeSourceCacheEntry(manifest, {
+            version: SOURCE_CACHE_VERSION,
+            provider: 'claude',
+            logicalPath: unit.path,
+            fingerprintPath: unit.path,
+            cacheStrategy: 'append-jsonl',
+            parserVersion,
+            fingerprint,
+            sessions: [merged],
+            appendState: await buildClaudeAppendState(unit.path, fingerprint.sizeBytes),
+          })
+          return { session: merged, wrote: true, refreshed: true }
+        }
+      }
     }
   }
 
@@ -512,10 +597,7 @@ async function refreshClaudeCacheUnit(
     parserVersion,
     fingerprint,
     sessions: [session],
-    appendState: {
-      endOffset: fingerprint.sizeBytes,
-      tailHash: appendStateTailHash(session),
-    },
+    appendState: await buildClaudeAppendState(unit.path, fingerprint.sizeBytes),
   })
   return { session, wrote: true, refreshed: true }
 }
