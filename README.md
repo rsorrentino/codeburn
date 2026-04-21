@@ -17,7 +17,7 @@
   <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/dashboard.jpg" alt="CodeBurn TUI dashboard" width="620" />
 </p>
 
-By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **cursor-agent**, **OpenCode**, **Pi**, and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
+By task type, tool, model, MCP server, and project. Supports **Claude Code**, **Codex** (OpenAI), **Cursor**, **cursor-agent**, **OpenCode**, **Pi**, **[OMP](https://github.com/can1357/oh-my-pi)** (Oh My Pi), and **GitHub Copilot** with a provider plugin system. Tracks one-shot success rate per activity type so you can see where the AI nails it first try vs. burns tokens on edit/test/fix retries. Interactive TUI dashboard with gradient charts, responsive panels, and keyboard navigation. Native macOS menubar app in `mac/`. CSV/JSON export.
 
 Works by reading session data directly from disk. No wrapper, no proxy, no API keys. Pricing from LiteLLM (auto-cached, all models supported).
 
@@ -36,7 +36,7 @@ npx codeburn
 ### Requirements
 
 - Node.js 20+
-- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), Cursor, OpenCode, Pi (`~/.pi/agent/sessions/`), and/or GitHub Copilot (`~/.copilot/session-state/`)
+- Claude Code (`~/.claude/projects/`), Codex (`~/.codex/sessions/`), Cursor, OpenCode, Pi (`~/.pi/agent/sessions/`), OMP (`~/.omp/agent/sessions/`), and/or GitHub Copilot (`~/.copilot/session-state/`)
 - For Cursor/OpenCode support: `better-sqlite3` is installed automatically as an optional dependency
 
 ## Usage
@@ -93,6 +93,7 @@ codeburn report --provider cursor-agent  # cursor-agent CLI only
 codeburn report --provider opencode  # OpenCode only
 codeburn report --provider pi        # Pi only
 codeburn report --provider copilot   # GitHub Copilot only
+codeburn report --provider omp        # OMP only
 codeburn today --provider codex      # Codex today
 codeburn export --provider claude    # export Claude data only
 ```
@@ -136,6 +137,7 @@ Either flag alone is valid. Inverted or malformed dates exit with a clear error.
 | Cursor | `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb` | Supported |
 | OpenCode | `~/.local/share/opencode/` (SQLite) | Supported |
 | Pi | `~/.pi/agent/sessions/` | Supported |
+| OMP | `~/.omp/agent/sessions/` | Supported |
 | GitHub Copilot | `~/.copilot/session-state/` | Supported (output tokens only) |
 | Amp | -- | Planned (provider plugin system) |
 
@@ -148,6 +150,22 @@ GitHub Copilot only logs output tokens in its session state, so Copilot cost row
 ### Adding a provider
 
 The provider plugin system makes adding a new provider a single file. Each provider implements session discovery, JSONL parsing, tool normalization, and model display names. See `src/providers/codex.ts` for an example.
+
+## Model aliases
+
+If you see `$0.00` for some models, the model name reported by your provider doesn't match any entry in the LiteLLM pricing data. This commonly happens when using a proxy that rewrites model names.
+
+Map any model name to a canonical one:
+
+```bash
+codeburn model-alias "my-proxy-model" "claude-opus-4-6"   # add alias
+codeburn model-alias --list                                # show configured aliases
+codeburn model-alias --remove "my-proxy-model"             # remove alias
+```
+
+Aliases are stored in `~/.config/codeburn/config.json` and applied at runtime before pricing lookup. The target name can be anything in the [LiteLLM model list](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) or a canonical name from the fallback table (e.g. `claude-sonnet-4-6`, `claude-opus-4-5`, `gpt-4o`).
+
+Built-in aliases ship for known proxy model name variants (such as `anthropic--claude-4.6-opus`). User-configured aliases take precedence over built-ins.
 
 ## Currency
 
@@ -306,9 +324,9 @@ All metrics are computed from your local session data. No LLM calls, fully deter
 
 **OpenCode** stores sessions in SQLite databases at `~/.local/share/opencode/opencode*.db`. CodeBurn queries the `session`, `message`, and `part` tables read-only, extracts token counts and tool usage, and recalculates cost using the LiteLLM pricing engine. Falls back to OpenCode's own cost field for models not in our pricing data. Subtask sessions (`parent_id IS NOT NULL`) are excluded to avoid double-counting. Supports multiple channel databases and respects `XDG_DATA_HOME`.
 
-**Pi** stores sessions as JSONL at `~/.pi/agent/sessions/<sanitized-cwd>/*.jsonl`. Each assistant message carries token usage (input, output, cacheRead, cacheWrite) plus inline `toolCall` content blocks. CodeBurn extracts token counts, normalizes Pi's lowercase tool names to the standard set (`bash` -> `Bash`, `dispatch_agent` -> `Agent`), and pulls bash commands from `toolCall.arguments.command` for the shell breakdown.
+**Pi / OMP** stores sessions as JSONL at `~/.pi/agent/sessions/<sanitized-cwd>/*.jsonl` (Pi) and `~/.omp/agent/sessions/<sanitized-cwd>/*.jsonl` (OMP). Each assistant message carries token usage (input, output, cacheRead, cacheWrite) plus inline `toolCall` content blocks. CodeBurn extracts token counts, normalizes tool names to the standard set (`bash` -> `Bash`, `dispatch_agent` -> `Agent`), and pulls bash commands from `toolCall.arguments.command` for the shell breakdown.
 
-CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session+message ID for OpenCode, by responseId for Pi), filters by date range per entry, and classifies each turn.
+CodeBurn reads these files, deduplicates messages (by API message ID for Claude, by cumulative token cross-check for Codex, by conversation/timestamp for Cursor, by session+message ID for OpenCode, by responseId for Pi/OMP), filters by date range per entry, and classifies each turn.
 
 ## Environment variables
 
@@ -342,7 +360,7 @@ src/
     codex.ts      Codex session discovery and JSONL parsing
     cursor.ts     Cursor SQLite parsing, language extraction
     opencode.ts   OpenCode SQLite session discovery and parsing
-    pi.ts         Pi agent JSONL session discovery and parsing
+    pi.ts         Pi/OMP agent JSONL session discovery and parsing
 ```
 
 ## Star History

@@ -1,7 +1,7 @@
 import { Command } from 'commander'
 import { installMenubarApp } from './menubar-installer.js'
 import { exportCsv, exportJson, type PeriodExport } from './export.js'
-import { loadPricing } from './models.js'
+import { loadPricing, setModelAliases } from './models.js'
 import { parseAllSessions, filterProjectsByName } from './parser.js'
 import { convertCost } from './currency.js'
 import { renderStatusBar } from './format.js'
@@ -139,6 +139,8 @@ const program = new Command()
   .option('--verbose', 'print warnings to stderr on read failures and skipped files')
 
 program.hook('preAction', async (thisCommand) => {
+  const config = await readConfig()
+  setModelAliases(config.modelAliases ?? {})
   if (thisCommand.opts<{ verbose?: boolean }>().verbose) {
     process.env['CODEBURN_VERBOSE'] = '1'
   }
@@ -687,6 +689,56 @@ program
     console.log(`  Symbol: ${symbol}`)
     console.log(`  Rate: 1 USD = ${rate} ${upperCode}`)
     console.log(`  Config saved to ${getConfigFilePath()}\n`)
+  })
+
+program
+  .command('model-alias [from] [to]')
+  .description('Map a provider model name to a canonical one for pricing (e.g. codeburn model-alias my-model claude-opus-4-6)')
+  .option('--remove <from>', 'Remove an alias')
+  .option('--list', 'List configured aliases')
+  .action(async (from?: string, to?: string, opts?: { remove?: string; list?: boolean }) => {
+    const config = await readConfig()
+    const aliases = config.modelAliases ?? {}
+
+    if (opts?.list || (!from && !opts?.remove)) {
+      const entries = Object.entries(aliases)
+      if (entries.length === 0) {
+        console.log('\n  No model aliases configured.')
+        console.log(`  Config: ${getConfigFilePath()}\n`)
+      } else {
+        console.log('\n  Model aliases:')
+        for (const [src, dst] of entries) {
+          console.log(`    ${src} -> ${dst}`)
+        }
+        console.log(`  Config: ${getConfigFilePath()}\n`)
+      }
+      return
+    }
+
+    if (opts?.remove) {
+      if (!(opts.remove in aliases)) {
+        console.error(`\n  Alias not found: ${opts.remove}\n`)
+        process.exitCode = 1
+        return
+      }
+      delete aliases[opts.remove]
+      config.modelAliases = Object.keys(aliases).length > 0 ? aliases : undefined
+      await saveConfig(config)
+      console.log(`\n  Removed alias: ${opts.remove}\n`)
+      return
+    }
+
+    if (!from || !to) {
+      console.error('\n  Usage: codeburn model-alias <from> <to>\n')
+      process.exitCode = 1
+      return
+    }
+
+    aliases[from] = to
+    config.modelAliases = aliases
+    await saveConfig(config)
+    console.log(`\n  Alias saved: ${from} -> ${to}`)
+    console.log(`  Config: ${getConfigFilePath()}\n`)
   })
 
 program
