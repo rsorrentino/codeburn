@@ -5,6 +5,7 @@
 - Run `npx tsx src/cli.ts report` and `npx tsx src/cli.ts today` to verify changes before any commit
 - For dashboard changes: run the interactive TUI and visually confirm rendering
 - For new features: test the happy path AND edge cases (empty data, missing config, pipe mode)
+- For any PR touching parser, source cache, or data aggregation: run cached vs uncached comparison before merge. Costs must match within $0.10. Use: `parseAllSessions(range, 'all', { noCache: false })` vs `parseAllSessions(range, 'all', { noCache: true })` and compare totals. A mismatch means the cache is serving stale or incorrect data
 
 ## Code Quality
 - Clean, minimal code. No dead code, no commented-out blocks, no TODO placeholders
