@@ -287,18 +287,23 @@ async function parseSessionFile(
 
   if (entries.length === 0) return null
 
-  let filteredEntries = entries
+  const sessionId = basename(filePath, '.jsonl')
+  let turns = groupIntoTurns(entries, seenMsgIds)
   if (dateRange) {
-    filteredEntries = entries.filter(e => {
-      if (!e.timestamp) return e.type === 'user'
-      const ts = new Date(e.timestamp)
+    // Bucket a turn by the timestamp of its first assistant call (when the cost was
+    // actually incurred). Filtering entries directly produced orphan assistant calls
+    // when a user message sat in one day and the response landed in another -- those
+    // got pushed as turns with empty timestamps, which some code paths counted and
+    // others dropped, producing inconsistent Today totals.
+    turns = turns.filter(turn => {
+      if (turn.assistantCalls.length === 0) return false
+      const firstCallTs = turn.assistantCalls[0]!.timestamp
+      if (!firstCallTs) return false
+      const ts = new Date(firstCallTs)
       return ts >= dateRange.start && ts <= dateRange.end
     })
-    if (filteredEntries.length === 0) return null
+    if (turns.length === 0) return null
   }
-
-  const sessionId = basename(filePath, '.jsonl')
-  const turns = groupIntoTurns(filteredEntries, seenMsgIds)
   const classified = turns.map(classifyTurn)
 
   return buildSessionSummary(sessionId, project, classified)
