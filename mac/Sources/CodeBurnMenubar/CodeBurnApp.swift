@@ -5,9 +5,7 @@ import Observation
 private let refreshIntervalSeconds: UInt64 = 15
 private let nanosPerSecond: UInt64 = 1_000_000_000
 private let refreshIntervalNanos: UInt64 = refreshIntervalSeconds * nanosPerSecond
-/// Fixed so the popover's anchor point doesn't shift each time today's cost changes.
-private let statusItemFixedWidth: CGFloat = 130
-private let statusItemCompactWidth: CGFloat = NSStatusItem.variableLength
+private let statusItemWidth: CGFloat = NSStatusItem.variableLength
 private let popoverWidth: CGFloat = 360
 private let popoverHeight: CGFloat = 660
 private let menubarTitleFontSize: CGFloat = 13
@@ -127,8 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     }
 
     private func setupStatusItem() {
-        let width = isCompact ? statusItemCompactWidth : statusItemFixedWidth
-        statusItem = NSStatusBar.system.statusItem(withLength: width)
+        statusItem = NSStatusBar.system.statusItem(withLength: statusItemWidth)
         guard let button = statusItem.button else { return }
         button.target = self
         button.action = #selector(handleButtonClick(_:))
