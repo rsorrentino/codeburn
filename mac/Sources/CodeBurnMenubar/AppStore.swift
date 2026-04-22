@@ -301,6 +301,11 @@ extension Double {
         let state = CurrencyState.shared
         return String(format: "\(state.symbol)%.2f", self * state.rate)
     }
+
+    func asCompactCurrencyWhole() -> String {
+        let state = CurrencyState.shared
+        return "\(state.symbol)\(Int((self * state.rate).rounded()))"
+    }
 }
 
 extension Int {

@@ -7,6 +7,7 @@ private let nanosPerSecond: UInt64 = 1_000_000_000
 private let refreshIntervalNanos: UInt64 = refreshIntervalSeconds * nanosPerSecond
 /// Fixed so the popover's anchor point doesn't shift each time today's cost changes.
 private let statusItemFixedWidth: CGFloat = 130
+private let statusItemCompactWidth: CGFloat = NSStatusItem.variableLength
 private let popoverWidth: CGFloat = 360
 private let popoverHeight: CGFloat = 660
 private let menubarTitleFontSize: CGFloat = 13
@@ -120,10 +121,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     // MARK: - Status Item
 
+    private var isCompact: Bool {
+        UserDefaults.standard.bool(forKey: "CodeBurnMenubarCompact")
+    }
+
     private func setupStatusItem() {
-        // Fixed width so the popover anchor (and thus popover position) doesn't shift
-        // every time today's cost or findings badge changes.
-        statusItem = NSStatusBar.system.statusItem(withLength: statusItemFixedWidth)
+        let width = isCompact ? statusItemCompactWidth : statusItemFixedWidth
+        statusItem = NSStatusBar.system.statusItem(withLength: width)
         guard let button = statusItem.button else { return }
         button.target = self
         button.action = #selector(handleButtonClick(_:))
@@ -152,20 +156,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         let attachment = NSTextAttachment()
         attachment.image = flame
         if let size = flame?.size {
-            // Nudge the image down ~2pt so its visual centre sits on the text baseline mid-line
-            // rather than riding high. Exact value tuned against SF Pro Display 13pt.
-            attachment.bounds = CGRect(x: 0, y: -2, width: size.width, height: size.height)
+            attachment.bounds = CGRect(x: 0, y: -3, width: size.width, height: size.height)
         }
 
         let hasPayload = store.todayPayload != nil
-        let valueText = " " + (store.todayPayload?.current.cost.asCompactCurrency() ?? "$—")
+        let compact = isCompact
+        let fallback = compact ? "$-" : "$—"
+        let formatted = store.todayPayload?.current.cost
+        let valueText = compact
+            ? (formatted?.asCompactCurrencyWhole() ?? fallback)
+            : " " + (formatted?.asCompactCurrency() ?? fallback)
         let color: NSColor = hasPayload ? .labelColor : .secondaryLabelColor
 
         let composed = NSMutableAttributedString()
         composed.append(NSAttributedString(attachment: attachment))
         composed.append(NSAttributedString(
             string: valueText,
-            attributes: [.font: font, .foregroundColor: color]
+            attributes: [.font: font, .foregroundColor: color, .baselineOffset: -1.0]
         ))
         button.attributedTitle = composed
         // Force immediate redraw. NSStatusItem sometimes defers the status bar paint for an
