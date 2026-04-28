@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://cdn.jsdelivr.net/gh/getagentseal/codeburn@main/assets/providers.png" alt="CodeBurn" width="520" />
+  <img src="https://raw.githubusercontent.com/getagentseal/codeburn/main/assets/providers.png" alt="CodeBurn" width="520" />
 </p>
 
 <p align="center"><strong>See where your AI coding tokens go.</strong></p>
